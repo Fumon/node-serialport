@@ -108,27 +108,52 @@ int setBaudRate(ConnectionOptionsBaton *data) {
     return -1;
   }
 
-  // If there is a custom baud rate on linux you can do the following trick with B38400
+  // Custom baud rate setting
   #if defined(__linux__) && defined(ASYNC_SPD_CUST)
     if (baudRate == -1) {
-      struct serial_struct serinfo;
-      serinfo.reserved_char[0] = 0;
-      if (-1 != ioctl(fd, TIOCGSERIAL, &serinfo)) {
-        serinfo.flags &= ~ASYNC_SPD_MASK;
-        serinfo.flags |= ASYNC_SPD_CUST;
-        serinfo.custom_divisor = (serinfo.baud_base + (data->baudRate / 2)) / data->baudRate;
-        if (serinfo.custom_divisor < 1)
-          serinfo.custom_divisor = 1;
 
-        ioctl(fd, TIOCSSERIAL, &serinfo);
-        ioctl(fd, TIOCGSERIAL, &serinfo);
+      #define BOTHER 0010000
+      #define TCGETS2 0x802c542A
+      #define TCSETS2 0x402c542B
+
+      struct termios2 {
+        tcflag_t c_iflag;
+        tcflag_t c_oflag;
+        tcflag_t c_cflag;
+        tcflag_t c_lflag;
+        cc_t c_line;
+        cc_t c_cc[NCCS];
+        unsigned int c_ispeed;
+        unsigned int c_ospeed;
+      } t;
+
+      if (!ioctl(fd, TCGETS2, &t)) {
+        t.c_cflag &= ~CBAUD;
+        t.c_cflag |= BOTHER;
+        t.c_ispeed = (unsigned int)data->baudRate;
+        t.c_ospeed = (unsigned int)data->baudRate;
+
+        if(ioctl(fd, TCSETS2, &t)) {
+          snprintf(data->errorString, sizeof(data->errorString), "Error: %s setting custom baud rate of %d", strerror(errno), data->baudRate);
+          return -1;
+        }
+
+        // VERIFY
+        struct termios2 tt;
+        if(ioctl(fd, TCGETS2, &tt)) {
+          snprintf(data->errorString, sizeof(data->errorString), "Error: %s || problem in verifying successful set %d", strerror(errno), data->baudRate);
+          return -1;
+        }
+        if(tt.c_ispeed != data->baudRate) {
+          snprintf(data->errorString, sizeof(data->errorString), "Error: Reported speed %u not set correctly to %d", tt.c_ispeed, data->baudRate);
+          return -1;
+        }
+
+        return 1;
       } else {
         snprintf(data->errorString, sizeof(data->errorString), "Error: %s setting custom baud rate of %d", strerror(errno), data->baudRate);
         return -1;
       }
-
-      // Now we use "B38400" to trigger the special baud rate.
-      baudRate = B38400;
     }
   #endif
 
